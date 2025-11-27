@@ -81,7 +81,7 @@ class VAE_Baseline(nn.Module):
 
 		fp_mu, fp_std, fp_enc = info["fp"]   # fp_mu, fp_std: 1 x n_subj xcb#.fDPc5XFn$U2 z0_dim; fp_enc: n_traj x n_subj x z0_dim
 		# fp_std = fp_std.abs()
-		fp_std = F.softplus(fp_std) + 1e-6 #added by bo
+		# fp_std = F.softplus(fp_std) + 1e-6 #added by Bo
 		fp_distr = Normal(fp_mu, fp_std) # approximate posterior distribution
 
 		kldiv_z0 = kl_divergence(fp_distr, self.z0_prior)   # KL divergence between encoded states and prior; shape: 1 x n_subj x z0_dim

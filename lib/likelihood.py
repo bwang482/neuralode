@@ -28,63 +28,6 @@ def gaussian_log_likelihood(mu_2d, data_2d, obsrv_std):
 	return log_prob
 
 
-# def gaussian_log_likelihood(mu_2d, data_2d, obsrv_std):
-#     var = obsrv_std ** 2
-#     n_dp = mu_2d.size(-1)
-    
-#     if n_dp == 0:
-#         return torch.zeros([1], device=mu_2d.device).squeeze()
-
-#     residual = data_2d - mu_2d
-#     log_prob = -0.5 * ((residual ** 2) / var).sum(dim=-1)
-#     log_prob += -0.5 * n_dp * torch.log(2 * torch.pi * var)
-
-#     # Average across data points
-#     log_prob = log_prob / n_dp
-
-#     return log_prob
-
-
-# def gaussian_log_likelihood(mu_2d, data_2d, obsrv_std, chunk_size=5000):
-#     """
-#     Memory-efficient Gaussian log-likelihood computation.
-    
-#     Args:
-#         mu_2d: Tensor [batch_size, num_points], predicted means.
-#         data_2d: Tensor [batch_size, num_points], observed data.
-#         obsrv_std: Scalar, observation standard deviation.
-#         chunk_size: Number of points to process per chunk.
-
-#     Returns:
-#         Tensor [batch_size]: log-likelihood for each sample in batch.
-#     """
-#     n_dp = mu_2d.size(-1)
-#     batch_size = mu_2d.size(0)
-
-#     if n_dp == 0:
-#         return torch.zeros(batch_size, device=mu_2d.device)
-
-#     variance = obsrv_std ** 2
-#     log_term = math.log(2 * math.pi) + torch.log(variance)
-
-#     log_prob = torch.zeros(batch_size, device=mu_2d.device)
-
-#     for start_idx in range(0, n_dp, chunk_size):
-#         end_idx = min(start_idx + chunk_size, n_dp)
-#         current_chunk_size = end_idx - start_idx
-
-#         mu_chunk = mu_2d[:, start_idx:end_idx]
-#         data_chunk = data_2d[:, start_idx:end_idx]
-
-#         squared_diff = (data_chunk - mu_chunk) ** 2
-#         normalized_diff_sum = squared_diff.sum(dim=-1) / variance
-
-#         chunk_log_prob = -0.5 * (normalized_diff_sum + current_chunk_size * log_term)
-#         log_prob += chunk_log_prob
-
-#     return log_prob
-
-
 def mse(mu_2d, data_2d):
         # mu_2d: predictions
         # data_2d: observations
@@ -99,78 +42,6 @@ def mse(mu_2d, data_2d):
         return mse
 
 
-# def compute_masked_func(mu, data, mask, func):
-
-# 	n_traj, n_subj, n_tp, n_dim = data.size()
-
-# 	val = []
-# 	for ii in range(n_traj):
-# 		for kk in range(n_subj):
-# 			for jj in range(n_dim):
-# 				data_masked = torch.masked_select(data[ii,kk,:,jj], mask[ii,kk,:,jj].bool())
-# 				mu_masked = torch.masked_select(mu[ii,kk,:,jj], mask[ii,kk,:,jj].bool())
-# 				val.append(func(mu_masked, data_masked))
-
-# 	val = torch.stack(val, 0)
-# 	val = val.reshape((n_traj, n_subj, n_dim))   # n_traj x n_subj x n_dim
-# 	val = torch.mean(val, -1)   # average across dims; n_traj x n_subj
-
-# 	return val
-
-
-# def masked_gaussian_log_likelihood(mu, obsrv_std, data, mask = None):
-# 	# mu: predictions
-# 	# data: observations
-
-# 	if len(mu.size()) == 3:
-# 		mu = mu.unsqueeze(0)   # add additional dimension for trajectory samples
-
-# 	if len(data.size()) == 2:
-# 		data = data.unsqueeze(0).unsqueeze(2)   # add additional dimensions for trajectory samples and time points
-# 	elif len(data.size()) == 3:
-# 		data = data.unsqueeze(0)   # add additional dimension for trajectory samples
-
-# 	if mask is None:   # complete data
-# 		n_traj, n_subj, n_tp, n_dim = mu.size()
-# 		mu_flat = mu.reshape(n_traj * n_subj, n_tp * n_dim)
-
-# 		n_traj, n_subj, n_tp, n_dim = data.size()
-# 		data_flat = data.reshape(n_traj * n_subj, n_tp * n_dim)
-
-# 		log_prob = gaussian_log_likelihood(mu_flat, data_flat, obsrv_std = obsrv_std)
-# 		log_prob = log_prob.reshape(n_traj, n_subj)   # n_traj x n_subj
-# 	else:
-# 		func = lambda mu, data: gaussian_log_likelihood(mu, data, obsrv_std = obsrv_std)
-# 		log_prob = compute_masked_func(mu, data, mask, func)   # n_traj x n_subj
-
-# 	return log_prob
-
-
-# def masked_mse(mu, data, mask = None):
-
-# 	if len(mu.size()) == 3:
-# 		mu = mu.unsqueeze(0)   # add additional dimension for trajectory samples
-
-# 	if len(data.size()) == 2:
-# 		data = data.unsqueeze(0).unsqueeze(2)   # add additional dimensions for trajectory samples and time points
-# 	elif len(data.size()) == 3:
-# 		data = data.unsqueeze(0)   # add additional dimension for trajectory samples
-
-# 	if mask is None:
-# 		n_traj, n_subj, n_tp, n_dim = mu.size()
-# 		mu_flat = mu.reshape(n_traj * n_subj, n_tp * n_dim)
-
-# 		n_traj, n_subj, n_tp, n_dim = data.size()
-# 		data_flat = data.reshape(n_traj * n_subj, n_tp * n_dim)
-
-# 		mse_loss = mse(mu_flat, data_flat)   # scalar
-# 	else:
-# 		mse_loss = compute_masked_func(mu, data, mask, mse)   # n_traj x n_subj
-# 		mse_loss = torch.mean(mse_loss)   # scalar
-
-# 	return mse_loss
-
-
 def compute_binary_loss(label_pred, label):
 
 	label = label.reshape(-1)   # vectorization into a row vector
@@ -180,8 +51,6 @@ def compute_binary_loss(label_pred, label):
  
 	n_traj = label_pred.size(0)
 	label_pred = label_pred.reshape(n_traj, -1)   # n_traj x n_subj
-
-	# assert(torch.sum(label == 0.) != 0 and torch.sum(label == 1.) != 0)
 
 	# Check if we have both positive and negative samples
 	has_positive = torch.sum(label == 1.) > 0
