@@ -1,0 +1,218 @@
+###
+# Encoder_z0_RNN: Standard RNN (GRU) encoder for Latent ODE
+# This encoder processes observations backwards in time using only GRU units
+# (no ODE between observations), then outputs z0 mean and std.
+###
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+import utils.model_functs as utils
+
+# -----
+
+class Encoder_z0_RNN(nn.Module):
+    """
+    RNN encoder that processes observations backwards in time to produce z0.
+    Unlike Encoder_z0_ODE_RNN, this uses only GRU units without ODE integration
+    between time points.
+    """
+
+    def __init__(self, input_dim, latent_dim, z0_dim=None, n_gru_unit=None, 
+                 device=torch.device("cpu"), bidirectional=False):
+        """
+        Args:
+            input_dim: Dimension of input (observations concatenated with mask)
+            latent_dim: Hidden dimension of the GRU
+            z0_dim: Dimension of the output latent state z0 (defaults to latent_dim)
+            n_gru_unit: Number of units in the intermediate layers
+            device: Device to use
+            bidirectional: Whether to use bidirectional GRU
+        """
+        super(Encoder_z0_RNN, self).__init__()
+
+        if z0_dim is None:
+            self.z0_dim = latent_dim
+        else:
+            self.z0_dim = z0_dim
+
+        self.input_dim = input_dim
+        self.latent_dim = latent_dim
+        self.device = device
+        self.bidirectional = bidirectional
+        
+        # Number of directions for GRU
+        self.n_directions = 2 if bidirectional else 1
+
+        # GRU layer for processing the sequence
+        self.gru = nn.GRU(
+            input_size=input_dim,
+            hidden_size=latent_dim,
+            num_layers=1,
+            batch_first=True,
+            bidirectional=bidirectional
+        )
+
+        # Transform the final hidden state to z0 (mean and std)
+        gru_output_dim = latent_dim * self.n_directions
+        
+        if n_gru_unit is None:
+            n_gru_unit = latent_dim
+
+        self.transform_z0 = nn.Sequential(
+            nn.Linear(gru_output_dim, n_gru_unit),
+            nn.Tanh(),
+            nn.Linear(n_gru_unit, self.z0_dim * 2)  # Output both mean and std
+        )
+        utils.init_netw_weights(self.transform_z0)
+
+    def forward(self, data, obs_tps):
+        """
+        Encode observations into latent state z0.
+        
+        Args:
+            data: Observations concatenated with mask, shape: (n_subj, n_tp, input_dim)
+            obs_tps: Observation time points, shape: (n_tp,)
+            
+        Returns:
+            mean_z0: Mean of z0 distribution, shape: (1, n_subj, z0_dim)
+            std_z0: Std of z0 distribution, shape: (1, n_subj, z0_dim)
+        """
+        n_subj, n_tp, n_dim = data.size()
+        device = data.device
+
+        # Reverse the sequence to process backwards in time
+        # This is important because we want to encode information from past to present
+        # and the last hidden state should represent the "initial" state z0
+        data_reversed = torch.flip(data, dims=[1])
+
+        # Initialize hidden state
+        h0 = torch.zeros(self.n_directions, n_subj, self.latent_dim, device=device)
+
+        # Run GRU on reversed sequence
+        # output: (n_subj, n_tp, latent_dim * n_directions)
+        # h_n: (n_directions, n_subj, latent_dim)
+        output, h_n = self.gru(data_reversed, h0)
+
+        # Get final hidden state
+        if self.bidirectional:
+            # Concatenate forward and backward final states
+            # h_n[0] is forward direction, h_n[1] is backward direction
+            final_hidden = torch.cat([h_n[0], h_n[1]], dim=-1)  # (n_subj, latent_dim * 2)
+        else:
+            final_hidden = h_n.squeeze(0)  # (n_subj, latent_dim)
+
+        # Transform to z0 mean and std
+        final_hidden = final_hidden.unsqueeze(0)  # (1, n_subj, latent_dim * n_directions)
+        z0_params = self.transform_z0(final_hidden)  # (1, n_subj, z0_dim * 2)
+
+        # Split into mean and std
+        mean_z0, std_z0 = utils.split_last_dim(z0_params)  # Each: (1, n_subj, z0_dim)
+
+        # Ensure std is positive
+        std_z0 = F.softplus(std_z0) + 1e-6
+
+        return mean_z0, std_z0
+
+
+class Encoder_z0_RNN_Attention(nn.Module):
+    """
+    RNN encoder with attention mechanism for encoding observations into z0.
+    Uses attention over all hidden states instead of just the final hidden state.
+    """
+
+    def __init__(self, input_dim, latent_dim, z0_dim=None, n_gru_unit=None,
+                 device=torch.device("cpu")):
+        """
+        Args:
+            input_dim: Dimension of input (observations concatenated with mask)
+            latent_dim: Hidden dimension of the GRU
+            z0_dim: Dimension of the output latent state z0
+            n_gru_unit: Number of units in intermediate layers
+            device: Device to use
+        """
+        super(Encoder_z0_RNN_Attention, self).__init__()
+
+        if z0_dim is None:
+            self.z0_dim = latent_dim
+        else:
+            self.z0_dim = z0_dim
+
+        self.input_dim = input_dim
+        self.latent_dim = latent_dim
+        self.device = device
+
+        # GRU layer
+        self.gru = nn.GRU(
+            input_size=input_dim,
+            hidden_size=latent_dim,
+            num_layers=1,
+            batch_first=True,
+            bidirectional=False
+        )
+
+        # Attention mechanism
+        self.attention = nn.Sequential(
+            nn.Linear(latent_dim, latent_dim // 2),
+            nn.Tanh(),
+            nn.Linear(latent_dim // 2, 1)
+        )
+        utils.init_netw_weights(self.attention)
+
+        # Transform attended representation to z0
+        if n_gru_unit is None:
+            n_gru_unit = latent_dim
+
+        self.transform_z0 = nn.Sequential(
+            nn.Linear(latent_dim, n_gru_unit),
+            nn.Tanh(),
+            nn.Linear(n_gru_unit, self.z0_dim * 2)
+        )
+        utils.init_netw_weights(self.transform_z0)
+
+    def forward(self, data, obs_tps):
+        """
+        Encode observations into latent state z0 using attention.
+        
+        Args:
+            data: Observations concatenated with mask, shape: (n_subj, n_tp, input_dim)
+            obs_tps: Observation time points, shape: (n_tp,)
+            
+        Returns:
+            mean_z0: Mean of z0 distribution, shape: (1, n_subj, z0_dim)
+            std_z0: Std of z0 distribution, shape: (1, n_subj, z0_dim)
+        """
+        n_subj, n_tp, n_dim = data.size()
+        device = data.device
+
+        # Reverse sequence to process backwards in time
+        data_reversed = torch.flip(data, dims=[1])
+
+        # Initialize hidden state
+        h0 = torch.zeros(1, n_subj, self.latent_dim, device=device)
+
+        # Run GRU
+        # output: (n_subj, n_tp, latent_dim)
+        output, _ = self.gru(data_reversed, h0)
+
+        # Compute attention weights
+        # attention_scores: (n_subj, n_tp, 1)
+        attention_scores = self.attention(output)
+        attention_weights = F.softmax(attention_scores, dim=1)
+
+        # Apply attention to get context vector
+        # context: (n_subj, latent_dim)
+        context = torch.sum(output * attention_weights, dim=1)
+
+        # Transform to z0 mean and std
+        context = context.unsqueeze(0)  # (1, n_subj, latent_dim)
+        z0_params = self.transform_z0(context)  # (1, n_subj, z0_dim * 2)
+
+        # Split into mean and std
+        mean_z0, std_z0 = utils.split_last_dim(z0_params)
+
+        # Ensure std is positive
+        std_z0 = F.softplus(std_z0) + 1e-6
+
+        return mean_z0, std_z0

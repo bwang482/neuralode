@@ -21,15 +21,6 @@ class ODEFunc(nn.Module):
 	def forward(self, t, y):
 		# calculate the gradient (vector field) of the ODE at time t and state y
 
-		# # Get the device of the network parameters
-		# device = next(self.grad_netw.parameters()).device
-
-		# # Ensure input tensors are on the correct device
-		# if y.device != device:
-		# 	y = y.to(device)
-		# if isinstance(t, torch.Tensor) and t.device != device:
-		# 	t = t.to(device)
-
 		grad = self.grad_netw(y)
 
 		return grad

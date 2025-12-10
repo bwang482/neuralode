@@ -14,9 +14,37 @@ from lib.likelihood import *
 
 # -----
 
+class TrajectoryAttention(nn.Module):
+    """Attention mechanism over latent trajectory timepoints."""
+    
+    def __init__(self, z0_dim, n_unit=64):
+        super(TrajectoryAttention, self).__init__()
+        self.attention = nn.Sequential(
+            nn.Linear(z0_dim, n_unit),
+            nn.Tanh(),
+            nn.Linear(n_unit, 1)
+        )
+        utils.init_netw_weights(self.attention)
+    
+    def forward(self, z_traj):
+        """
+        z_traj: n_traj x n_subj x n_tp x z0_dim
+        Returns: n_traj x n_subj x z0_dim (attention-weighted representation)
+        """
+        # Compute attention scores
+        attn_scores = self.attention(z_traj)  # n_traj x n_subj x n_tp x 1
+        attn_weights = F.softmax(attn_scores, dim=2)  # softmax over timepoints
+        
+        # Weighted sum
+        attended = (attn_weights * z_traj).sum(dim=2)  # n_traj x n_subj x z0_dim
+        
+        return attended, attn_weights.squeeze(-1)  # also return weights for visualization
+
+
 class VAE_Baseline(nn.Module):
 
-	def __init__(self, z0_dim, z0_prior, obsrv_std, n_label = 1, n_unit = 100, classif = False, classif_w_recon = True):
+	def __init__(self, z0_dim, z0_prior, obsrv_std, dropout_rate=0.0, n_label = 1, n_unit = 100, 
+				classif = True, classif_w_recon = True, use_traj_attention=False):
 
 		super(VAE_Baseline, self).__init__()
 
@@ -25,13 +53,19 @@ class VAE_Baseline(nn.Module):
 		self.n_label = n_label
 		self.classif = classif
 		self.classif_w_recon = classif_w_recon
+		self.use_traj_attention = use_traj_attention
 
 		if self.classif:
+			if use_traj_attention:
+				self.traj_attention = TrajectoryAttention(z0_dim, n_unit=n_unit)
+
 			self.classifier = nn.Sequential(
 					nn.Linear(z0_dim, n_unit),
 					nn.ReLU(),
+					nn.Dropout(dropout_rate),
 					nn.Linear(n_unit, n_unit),
 					nn.ReLU(),
+					nn.Dropout(dropout_rate),
 					nn.Linear(n_unit, n_label))
 
 			utils.init_netw_weights(self.classifier)
@@ -54,6 +88,27 @@ class VAE_Baseline(nn.Module):
 		log_prob = torch.mean(log_prob, 1)   # average across individuals; shape: n_traj x 1
 
 		return log_prob
+	
+	def get_binary_recon_likelihood(self, truth, pred_y, mask=None):
+		"""Binary cross-entropy reconstruction loss for binary data."""
+		n_subj, n_tp, n_dim = truth.size()
+		
+		truth_rep = truth.repeat(pred_y.size(0), 1, 1, 1)
+		
+		if mask is not None:
+			mask = mask.repeat(pred_y.size(0), 1, 1, 1)
+			# Compute BCE only on observed entries
+			bce = nn.functional.binary_cross_entropy_with_logits(
+				pred_y, truth_rep, reduction='none'
+			)
+			bce = (bce * mask).sum(dim=[2, 3]) / mask.sum(dim=[2, 3]).clamp(min=1)
+		else:
+			bce = nn.functional.binary_cross_entropy_with_logits(
+				pred_y, truth_rep, reduction='none'
+			).mean(dim=[2, 3])
+		
+		# Return negative BCE as "log likelihood" (higher is better)
+		return -bce.mean(dim=1)  # Average across subjects
 
 
 	def get_mse(self, truth, pred_y, mask = None):
@@ -81,7 +136,7 @@ class VAE_Baseline(nn.Module):
 
 		fp_mu, fp_std, fp_enc = info["fp"]   # fp_mu, fp_std: 1 x n_subj xcb#.fDPc5XFn$U2 z0_dim; fp_enc: n_traj x n_subj x z0_dim
 		# fp_std = fp_std.abs()
-		# fp_std = F.softplus(fp_std) + 1e-6 #added by Bo
+		fp_std = F.softplus(fp_std) + 1e-6 #added by bo
 		fp_distr = Normal(fp_mu, fp_std) # approximate posterior distribution
 
 		kldiv_z0 = kl_divergence(fp_distr, self.z0_prior)   # KL divergence between encoded states and prior; shape: 1 x n_subj x z0_dim

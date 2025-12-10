@@ -1,10 +1,3 @@
-#!/usr/bin/env python
-
-# Rubanova et al.
-# Latent ordinary differential equations for irregularly-sampled time series. NeurIPS, 2019
-# NeurIPS, 2019
-
-# -----
 
 import os
 import time
@@ -27,7 +20,7 @@ import utils.model_functs as utils
 from utils.metrics import show_results
 from utils.general_functs import dt_setup, dt_cleanup, save_pickle
 from data.parse_datasets import parse_datasets
-from lib.create_latent_ode_model import create_LatentODE_model
+from lib.create_model import create_model, print_model_summary
 
 
 def main(rank, world_size, args):
@@ -60,9 +53,10 @@ def main(rank, world_size, args):
     # Start recording memory snapshot history
     # start_record_memory_history()
 
+    print(f"\nModel type: {args.model_type}")
     print("Final hyperparameters:")
     for arg in vars(args):
-        print(f"{arg}: {getattr(args, arg)}")
+        print(f"  {arg}: {getattr(args, arg)}")
       
     # ============================================================================
     # Load data
@@ -74,18 +68,17 @@ def main(rank, world_size, args):
     # ============================================================================
     # Create model
     # ============================================================================
-    logger.info("Model initiation")
+    logger.info(f"Model initiation: {args.model_type}")
     obsrv_std = torch.Tensor([args.obsrv_std]).to(device) 
     z0_prior = Normal(torch.Tensor([0.0]).to(device), torch.Tensor([1.]).to(device))   # standard normal distribution
 
-    model = create_LatentODE_model(
-        args, 
-        data_obj["input_dim"], 
-        z0_prior, 
-        obsrv_std, 
-        data_obj["n_labels"]
-    )   # create latent ODE model
+    # Create model using factory function (supports all model types)
+    model = create_model(args, data_obj["input_dim"], z0_prior, obsrv_std, data_obj["n_labels"])
     model = model.to(device)
+
+    # Print model summary (only on main process)
+    if rank == 0 or not args.distributed:
+        print_model_summary(model, args.model_type)
 
     # Wrap model in DDP if using distributed training
     if args.distributed:
@@ -100,10 +93,7 @@ def main(rank, world_size, args):
     start_time = time.time()
     n_batch = data_obj["n_train_batches"]
 
-    optimizer = torch.optim.Adamax(model.parameters(), 
-                                   lr=args.lr, 
-                                   weight_decay=args.weight_decay)   # adamax algorithm
-    
+    optimizer = torch.optim.Adamax(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)   # adamax algorithm
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
         mode='min',        # Assuming you minimize a metric like validation loss
@@ -262,15 +252,17 @@ def main(rank, world_size, args):
                         # Save checkpoint
                         if args.save_file:
                             timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+                            model_type_str = args.model_type.replace('_', '-')
                             checkpoint_path = os.path.join(
                                 checkpoint_dir,
-                                f"best_checkpoint_{args.dataset}_{args.look_back}_epoch{best_epoch}_auc{best_val_auc:.4f}_{timestamp}.pt"
+                                f"best_checkpoint_{model_type_str}_{args.dataset}_{args.look_back}_epoch{best_epoch}_auc{best_val_auc:.4f}_{timestamp}.pt"
                             )
                             torch.save({
                                 'epoch': best_epoch,
                                 'model_state_dict': best_model_state,
                                 'optimizer_state_dict': optimizer.state_dict(),
                                 'val_auc': best_val_auc,
+                                'model_type': args.model_type,
                                 'args': args
                             }, checkpoint_path)
                             print(f"Checkpoint saved to: {checkpoint_path}")
@@ -311,6 +303,7 @@ def main(rank, world_size, args):
     # ============================================================================
     logger.info("="*20 + " Validation set results " + "="*20)
     final_hyperparams = {
+        "model_type": args.model_type,
         "lr": args.lr,
         "n_traj": args.n_traj,
         "ce_weight": args.ce_weight,
@@ -319,7 +312,6 @@ def main(rank, world_size, args):
         "rec_latent_dims": args.rec_latent_dims,
         "gen_layers": args.gen_layers,
         "rec_layers": args.rec_layers,
-        "units": args.units,
         "gru_units": args.gru_units,
         "classif_units": args.classif_units,
         "sample_tp": args.sample_tp,
@@ -328,14 +320,27 @@ def main(rank, world_size, args):
         "early_stop_patience": args.early_stop_patience,
         "best_epoch": best_epoch,
     }
+    
+    # Add RNN-VAE specific hyperparameters if applicable
+    if args.model_type == 'rnn_vae':
+        final_hyperparams.update({
+            "decoder_type": args.decoder_type,
+            "bidirectional": args.bidirectional,
+            "use_attention": args.use_attention,
+            "dec_layers": args.dec_layers,
+        })
+    
     val_loss = float(val_res["loss"].detach())
     val_auc = best_val_auc  # Use best validation AUC
+    logger.info(f"Model type: {args.model_type}")
     logger.info(f"Hyperparameters: {final_hyperparams}")
     logger.info(f"Validation set final loss: {val_loss:.4f}")
     logger.info(f"Validation set best AUC: {val_auc:.4f} (at epoch {best_epoch})")
+    
     # Save model
     if args.save_file:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+        model_type_str = args.model_type.replace('_', '-')
         lr_str = f"{final_hyperparams['lr']:.3e}".replace('.', 'p').replace('+','').replace('-','') 
         ntraj_str = f"ntraj{final_hyperparams['n_traj']}"
         cew_str = f"cew{final_hyperparams['ce_weight']}"
@@ -344,16 +349,16 @@ def main(rank, world_size, args):
         rldim_str = f"rldim{final_hyperparams['rec_latent_dims']}"
         glayer_str = f"glayer{final_hyperparams['gen_layers']}"
         rlayer_str = f"rlayer{final_hyperparams['rec_layers']}"
-        nunits_str = f"nunits{final_hyperparams['units']}"
         ngru_str = f"ngru{final_hyperparams['gru_units']}"
         nclassif_str = f"nclassif{final_hyperparams['classif_units']}"
         sampletp_str = f"sampletp{final_hyperparams['sample_tp']}".replace('.', 'p')
 
         featype_str = args.feat_type.replace('_', '-')
         auc_str = f"auc{val_auc:.3f}".replace('.', 'p')
-        filename = f"final_latent_ode_{args.dataset}_{args.look_back}_{featype_str}_{auc_str}_lr{lr_str}_" + \
-                    f"{ntraj_str}_{cew_str}_{gldim_str}_{rldim_str}_{glayer_str}_{rlayer_str}_{nunits_str}_{ngru_str}_" + \
-                        f"{nclassif_str}_{sampletp_str}_{zlast_str}_{timestamp}.pt"
+        
+        # Include model type in filename
+        filename = f"final_{model_type_str}_{args.dataset}_{args.look_back}_{featype_str}_{auc_str}_lr{lr_str}_" + \
+                    f"{ntraj_str}_{cew_str}_{gldim_str}_{rldim_str}_{glayer_str}_{rlayer_str}_{ngru_str}_{nclassif_str}_{sampletp_str}_{zlast_str}_{timestamp}.pt"
         save_path = os.path.join(MODELS_DIR, args.dataset.lower(), filename)
 
         # Create directory if it doesn't exist
@@ -395,7 +400,7 @@ def main(rank, world_size, args):
     if args.save_file:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M")
         model_params = f"lr{lr_str}_{ntraj_str}_{cew_str}_{gldim_str}_{rldim_str}_{glayer_str}_{rlayer_str}_" + \
-                            f"{nunits_str}_{ngru_str}_{nclassif_str}_{sampletp_str}_{zlast_str}"
+                            f"{ngru_str}_{nclassif_str}_{sampletp_str}_{zlast_str}"
         test_auc_str = f"auc{test_metrics['auc']:.3f}".replace('.', 'p')
         pred_dir = os.path.join(RESULTS_DIR, "final_results", args.dataset.upper())
 
@@ -404,7 +409,7 @@ def main(rank, world_size, args):
 
         pred_file = os.path.join(
             pred_dir,
-            f"test_predictions_{args.look_back}_{featype_str}_{test_auc_str}_{model_params}_{timestamp}.pk"
+            f"test_predictions_{model_type_str}_{args.look_back}_{featype_str}_{test_auc_str}_{model_params}_{timestamp}.pk"
         )
 
         save_pickle(test_metrics, pred_file)
@@ -433,55 +438,82 @@ def validate_args(args):
             if device_id >= available_devices:
                 raise ValueError(f"Device cuda:{device_id} is not available. Only {available_devices} GPUs detected.")
     
+    # Validate model type
+    valid_model_types = ['latent_ode', 'latent_ode_rnn', 'rnn_vae', 'ode_rnn', 'classic_rnn']
+    if args.model_type not in valid_model_types:
+        raise ValueError(f"Invalid model_type: {args.model_type}. Choose from: {valid_model_types}")
+    
     return args
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description = 'Latent ODE')   # parser for command-line options and arguments
+    parser = argparse.ArgumentParser(description='Latent ODE / RNN-VAE Training')
+
+    # Model selection
+    parser.add_argument('--model_type', type=str, default='latent_ode',
+                        choices=['latent_ode', 'latent_ode_rnn', 'rnn_vae', 'ode_rnn', 'classic_rnn'],
+                        help="Model type: 'latent_ode' (VAE, ODE-RNN enc + ODE dec), "
+                             "'latent_ode_rnn' (VAE, RNN enc + ODE dec), "
+                             "'rnn_vae' (VAE, RNN enc + RNN dec), "
+                             "'ode_rnn' (direct, ODE-RNN enc), "
+                             "'classic_rnn' (direct, RNN enc)")
 
     # Dataset and task parameters
-    parser.add_argument('--dataset', type = str, default = 'CAD', help = "dataset to load, available: MDD, CAD")
-    parser.add_argument('--look_back', type = str, default = '1y', help = "look back window (1y, 2y, 3y)")
-    parser.add_argument('--feat_type', type = str, default = 'demo_dx', help = "Feature type (demo_dx, demo_dx_med)")
-    parser.add_argument('--sample_tp', type = float, default = None, help = "number/percentage of time points to sub-sample")
-    parser.add_argument('--val_sample_tp', type = float, default = None, help = "sample_tp for validation set")
-    parser.add_argument('--extrap', action = 'store_true', help = "Set extrapolation mode (default: False)")
+    parser.add_argument('--dataset', type=str, default='CAD', help="dataset to load, available: MDD, CAD")
+    parser.add_argument('--look_back', type=str, default='1y', help="look back window (1y, 2y, 3y)")
+    parser.add_argument('--feat_type', type=str, default='demo_dx', help="Feature type (demo_dx, demo_dx_med)")
+    parser.add_argument('--sample_tp', type=float, default=None, help="number/percentage of time points to sub-sample")
+    parser.add_argument('--val_sample_tp', type=float, default=None, help="sample_tp for validation set")
+    parser.add_argument('--extrap', action='store_true', help="Set extrapolation mode (default: False)")
 
     # Training parameters
-    parser.add_argument('--batch_size', type = int, default = 64, help ="batch size")
-    parser.add_argument('--n_iter', type = int, default = 100, help = "number of iterations")
-    parser.add_argument('--lr', type = float, default = 1e-3, help = "starting learning rate")
-    parser.add_argument('--n_traj', type = int, default = 1, help = "number of latent trajectories")
-    parser.add_argument('--ce_weight', type = int, default = 100, help = "weight multiplied to cross-entropy loss")
-    parser.add_argument('--z_last', action = 'store_false', help = "use the latent state of the last time point for prediction (default: True)")
-    parser.add_argument('--obsrv_std', type = float, default = 0.01, help = "observation noise std for reconstruction loss")
-    parser.add_argument('--early_stop_patience', type = int, default = 10, help = "number of epochs without improvement before stopping")
+    parser.add_argument('--batch_size', type=int, default=64, help="batch size")
+    parser.add_argument('--n_iter', type=int, default=100, help="number of iterations")
+    parser.add_argument('--lr', type=float, default=1e-3, help="starting learning rate")
+    parser.add_argument('--n_traj', type=int, default=1, help="number of latent trajectories")
+    parser.add_argument('--ce_weight', type=int, default=100, help="weight multiplied to cross-entropy loss")
+    parser.add_argument('--z_last', action='store_false', help="use the latent state of the last time point for prediction (default: True)")
+    parser.add_argument('--obsrv_std', type=float, default=0.01, help="observation noise std for reconstruction loss")
+    parser.add_argument('--early_stop_patience', type=int, default=10, help="number of epochs without improvement before stopping")
     parser.add_argument('--weight_decay', type=float, default=0.0, help="Weight decay (L2 penalty)")
 
-    # Model parameters
-    parser.add_argument('--gen-latent-dims', type = int, default = 100, help = "dimensionality of the latent state in the generative ODE")
-    parser.add_argument('--rec-latent-dims', type = int, default = 100, help = "dimensionality of the latent state in the recognition ODE")
-    parser.add_argument('--gen-layers', type = int, default = 3, help = "number of layers in ODE func in generative ODE")
-    parser.add_argument('--rec-layers', type = int, default = 3, help = "number of layers in ODE func in recognition ODE")
-    parser.add_argument('--units', type = int, default = 100, help = "number of units per layer in ODE func")
-    parser.add_argument('--gru-units', type = int, default = 100, help = "number of units per layer in the GRU update network")
-    parser.add_argument('--classif-units', type = int, default = 100, help = "number of units per layer in the classification network")
-    parser.add_argument('--dropout-rate', type = float, default = 0.0, help = "dropout rate in the classifier network")
+    # Model architecture parameters
+    parser.add_argument('--gen-latent-dims', type=int, default=100, help="dimensionality of the latent state in the generative ODE")
+    parser.add_argument('--rec-latent-dims', type=int, default=100, help="dimensionality of the latent state in the recognition ODE")
+    parser.add_argument('--gen-layers', type=int, default=3, help="number of layers in ODE func in generative ODE")
+    parser.add_argument('--rec-layers', type=int, default=3, help="number of layers in ODE func in recognition ODE")
+    parser.add_argument('--units', type=int, default=100, help="number of units per layer in ODE func")
+    parser.add_argument('--gru-units', type=int, default=100, help="number of units per layer in the GRU update network")
+    parser.add_argument('--classif-units', type=int, default=100, help="number of units per layer in the classification network")
+    parser.add_argument('--dropout-rate', type=float, default=0.0, help="dropout rate in the classifier network")
     parser.add_argument('--use_traj_attention', action='store_true', help='Use attention over trajectory for classification')
 
+    # RNN-VAE specific parameters (NEW)
+    parser.add_argument('--decoder_type', type=str, default='simple',
+                        choices=['simple', 'standard', 'input_driven'],
+                        help="RNN decoder type for RNN-VAE model")
+    parser.add_argument('--bidirectional', action='store_true', 
+                        help="Use bidirectional encoder (for latent_ode_rnn, rnn_vae, classic_rnn)")
+    parser.add_argument('--use_attention', action='store_true', 
+                        help="Use attention mechanism in encoder (for latent_ode_rnn and rnn_vae)")
+    parser.add_argument('--dec_layers', type=int, default=1, 
+                        help="Number of decoder layers (for rnn_vae)")
+    parser.add_argument('--rnn_layers', type=int, default=1,
+                        help="Number of RNN layers (for classic_rnn)")
+
     # Classification parameters
-    parser.add_argument('--classif', action = 'store_false', help = "include binary classification loss")
-    parser.add_argument('--classif_w_recon', action = 'store_false', help = "jointly consider classification loss and reconstruction loss")
-    parser.add_argument('--warmup_epochs', type = int, default = 0, help = "Number of epochs for classifier warm-up")
+    parser.add_argument('--classif', action='store_false', help="include binary classification loss")
+    parser.add_argument('--classif_w_recon', action='store_false', help="jointly consider classification loss and reconstruction loss")
+    parser.add_argument('--warmup_epochs', type=int, default=0, help="Number of epochs for classifier warm-up")
 
     # Distributed training and save file parameters
-    parser.add_argument('--distributed', action = 'store_true', help = "enable distributed training")
-    parser.add_argument('--world_size', type = int, default = 2, help = "number of processes (GPUs) for distributed training")
-    parser.add_argument('--device_ids', nargs = '+', type = int, default = [0, 1], help = "specific GPU device IDs to use (e.g., 0 1 for cuda:0 and cuda:1)")
-    parser.add_argument('--cuda', type = str, default = 'cuda:0', help = "which gpu to use if not distributed")
-    parser.add_argument('--save_file', action = 'store_false', help = "save trained model")
+    parser.add_argument('--distributed', action='store_true', help="enable distributed training")
+    parser.add_argument('--world_size', type=int, default=2, help="number of processes (GPUs) for distributed training")
+    parser.add_argument('--device_ids', nargs='+', type=int, default=[0, 1], help="specific GPU device IDs to use (e.g., 0 1 for cuda:0 and cuda:1)")
+    parser.add_argument('--cuda', type=str, default='cuda:0', help="which gpu to use if not distributed")
+    parser.add_argument('--save_file', action='store_false', help="save trained model")
 
-    parser.add_argument('--feat_dir', type = str, default = '', help = "")
+    parser.add_argument('--feat_dir', type=str, default='', help="")
 
     args, unkwn = parser.parse_known_args()
     args.random_seed = random_state
@@ -499,6 +531,6 @@ if __name__ == '__main__':
         mp.spawn(main, args=(world_size, args), nprocs=world_size, join=True)
     else:
         logger.info(f"Using GPU: {args.cuda}")
+        logger.info(f"Model type: {args.model_type}")
         # Single process training
         main(0, 1, args) 
-

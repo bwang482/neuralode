@@ -52,6 +52,8 @@ def compute_binary_loss(label_pred, label):
 	n_traj = label_pred.size(0)
 	label_pred = label_pred.reshape(n_traj, -1)   # n_traj x n_subj
 
+	# assert(torch.sum(label == 0.) != 0 and torch.sum(label == 1.) != 0)
+
 	# Check if we have both positive and negative samples
 	has_positive = torch.sum(label == 1.) > 0
 	has_negative = torch.sum(label == 0.) > 0

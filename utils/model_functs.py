@@ -573,7 +573,8 @@ def compute_loss_classification_only(args, model, test_dataloader, n_traj, z_las
     all_pids = []
     
     # Process each batch
-    for batch_dict in tqdm(test_dataloader, desc="Processing Test Set (Classification Only)", file=sys.stderr):
+    for batch_dict in test_dataloader:
+    # for batch_dict in test_dataloader, desc="Processing Test Set (Classification Only)", file=sys.stderr):
         if device is not None:
             batch_dict = transfer_batch_to_device(batch_dict, device)
 

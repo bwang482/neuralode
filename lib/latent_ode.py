@@ -16,16 +16,19 @@ from lib.base_vae import VAE_Baseline
 class LatentODE(VAE_Baseline):
 
 	def __init__(self, encoder_z0, decoder, diffeq_solver, z0_dim, z0_prior, obsrv_std,
-			n_label = 1, n_unit = 100, classif = False, classif_w_recon = True):
+			dropout_rate=0.0, n_label = 1, n_unit = 100, classif = False, classif_w_recon = True, 
+			use_traj_attention=False):
 
 		super(LatentODE, self).__init__(
 			z0_dim = z0_dim,
 			z0_prior = z0_prior,
 			obsrv_std = obsrv_std,
+			dropout_rate = dropout_rate,
 			n_label = n_label,
 			n_unit = n_unit,
 			classif = classif,
-			classif_w_recon = classif_w_recon)
+			classif_w_recon = classif_w_recon,
+			use_traj_attention=use_traj_attention)
 
 		self.encoder_z0 = encoder_z0
 		self.diffeq_solver = diffeq_solver
@@ -39,7 +42,6 @@ class LatentODE(VAE_Baseline):
 			data_w_mask = torch.cat((obs_data, mask), -1)
 		
 		fp_mu, fp_std = self.encoder_z0(data_w_mask, obs_tps)   # encode data into latent representations; shape: 1 x n_subj x z0_dim
-		# fp_std = fp_std.abs()		
 
 		mean_z0 = fp_mu.repeat(n_traj, 1, 1)   # n_traj x n_subj x z0_dim
 		std_z0 = fp_std.repeat(n_traj, 1, 1)   # n_traj x n_subj x z0_dim
@@ -55,10 +57,17 @@ class LatentODE(VAE_Baseline):
 		}
 
 		if self.classif:
-			if z_last:
+			if self.use_traj_attention:
+				# Use attention over full trajectory
+				attended_z, attn_weights = self.traj_attention(sol_y)
+				info["label_pred"] = self.classifier(attended_z).squeeze(-1)
+				info["attn_weights"] = attn_weights.detach()
+			elif z_last:
+				# Use only last timepoint
 				lp_enc = sol_y[:, :, -1, :] 
 				info["label_pred"] = self.classifier(lp_enc).squeeze(-1)
 			else:
+				# Use initial encoding
 				info["label_pred"] = self.classifier(fp_enc).squeeze(-1)   # n_traj x n_subj x n_label
 
 
@@ -100,7 +109,11 @@ class LatentODE(VAE_Baseline):
 		
 		# Only compute classification predictions
 		if self.classif:
-			if z_last:
+			if self.use_traj_attention:
+				attended_z, attn_weights = self.traj_attention(sol_y)
+				info["label_pred"] = self.classifier(attended_z).squeeze(-1)
+				info["attn_weights"] = attn_weights.detach()
+			elif z_last:
 				lp_enc = sol_y[:, :, -1, :]  # Use last time point
 				info["label_pred"] = self.classifier(lp_enc).squeeze(-1)
 			else:

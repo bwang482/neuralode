@@ -58,7 +58,7 @@ def evaluate_best_model_on_test_set(args, best_hyperparams, best_model_state, de
     
     # Create model with best hyperparameters
     logger.info("Creating model with best hyperparameters...")
-    obsrv_std = torch.Tensor([0.01]).to(device)
+    obsrv_std = torch.Tensor([args.obsrv_std]).to(device)
     z0_prior = Normal(torch.Tensor([0.0]).to(device), torch.Tensor([1.]).to(device))
     
     model = create_LatentODE_model(
@@ -113,11 +113,19 @@ def save_test_predictions(args, test_metrics, best_hyperparams, timestamp=None):
     rldim_str = f"rldim{best_hyperparams['rec_latent_dims']}"
     glayer_str = f"glayer{best_hyperparams['gen_layers']}"
     rlayer_str = f"rlayer{best_hyperparams['rec_layers']}"
+    nunits_str = f"nunits{best_hyperparams['units']}"
     ngru_str = f"ngru{best_hyperparams['gru_units']}"
     nclassif_str = f"nclassif{best_hyperparams['classif_units']}"
     sampletp_str = f"sampletp{best_hyperparams['sample_tp']}".replace('.', 'p')
+    weightdecay_str = f"wd{best_hyperparams['weight_decay']}".replace('.', 'p')
+    dropout_str = f"dropout{best_hyperparams['dropout_rate']}".replace('.', 'p')
+    usetrajattn_str = f"usetrajattn{best_hyperparams['use_traj_attention']}"
     
-    model_params = f"lr{lr_str}_{ntraj_str}_{cew_str}_{gldim_str}_{rldim_str}_{glayer_str}_{rlayer_str}_{ngru_str}_{nclassif_str}_{sampletp_str}_{zlast_str}"
+    model_params = (
+            f"lr{lr_str}_{ntraj_str}_{cew_str}_{gldim_str}_{rldim_str}_"
+            f"{glayer_str}_{rlayer_str}_{nunits_str}_{ngru_str}_{nclassif_str}_"
+            f"{sampletp_str}_{zlast_str}_{weightdecay_str}_{dropout_str}_{usetrajattn_str}"
+        )
     
     # Create predictions filename
     feat_type_str = args.feat_type.replace('_', '-')
@@ -148,9 +156,12 @@ def train_latent_ode(config):
     args.rec_latent_dims = hyperparams['rec_latent_dims']
     args.gen_layers = hyperparams['gen_layers']
     args.rec_layers = hyperparams['rec_layers']
+    args.units = hyperparams['units']
     args.gru_units = hyperparams['gru_units']
     args.classif_units = hyperparams['classif_units']
     args.sample_tp = hyperparams['sample_tp']
+    args.dropout_rate = hyperparams['dropout_rate']
+    args.use_traj_attention = hyperparams['use_traj_attention']
 
     # DEVICE SETUP
     # Use ray.train.torch.get_device() instead of manual setup
@@ -182,16 +193,24 @@ def train_latent_ode(config):
     # Create Model, Optimizer, and Scheduler
     # ============================================================================
     logger.info("Model initiation")
-    obsrv_std = torch.Tensor([0.01]).to(device)
+    obsrv_std = torch.Tensor([args.obsrv_std]).to(device)
     z0_prior = Normal(torch.Tensor([0.0]).to(device), torch.Tensor([1.]).to(device))   # standard normal distribution
     # Instantiate the Latent ODE model
-    model = create_LatentODE_model(args, data_obj["input_dim"], z0_prior, obsrv_std, data_obj["n_labels"])
+    model = create_LatentODE_model(
+        args, 
+        data_obj["input_dim"], 
+        z0_prior, 
+        obsrv_std, 
+        data_obj["n_labels"]
+    )
     
     # Prepare Model and Optimizer with Ray Train
     model = train.torch.prepare_model(model)
 
     # Initialize and prepare the optimizer
-    optimizer = torch.optim.Adamax(model.parameters(), lr=hyperparams["lr"])
+    optimizer = torch.optim.Adamax(model.parameters(), 
+                                   lr=hyperparams["lr"], 
+                                   weight_decay=hyperparams['weight_decay'])
     optimizer = train.torch.prepare_optimizer(optimizer)
 
     # Learning Rate Scheduler
@@ -369,13 +388,19 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', type = str, default = 'CAD', help = "dataset to load, available: MDD, CAD")
     parser.add_argument('--look_back', type = str, default = '1y', help = "look back window (1y, 2y, 3y)")
     parser.add_argument('--feat_type', type = str, default = 'demo_dx', help = "Feature type (demo_dx, demo_dx_med)")
+    parser.add_argument('--sample_tp', type = float, default = None, help = "number/percentage of time points to sub-sample")
     parser.add_argument('--extrap', action = 'store_true', help = "Set extrapolation mode (default: False)")
-    parser.add_argument('--batch_size', type = int, default = 64, help ="batch size")
-    parser.add_argument('--sample_tp', type=float, default=None, help='Fraction of time points to sample during training')
-    parser.add_argument('--n_iter', type = int, default = 100, help = "number of iterations")
-    parser.add_argument('--warmup_epochs', type=int, default=0, help="Number of epochs for classifier warm-up")
 
     # Training and model parameters
+    parser.add_argument('--lr', type = float, default = 1e-3, help = "starting learning rate")
+    parser.add_argument('--n_iter', type = int, default = 100, help = "number of iterations")
+    parser.add_argument('--warmup_epochs', type=int, default=0, help="Number of epochs for classifier warm-up")
+    parser.add_argument('--batch_size', type = int, default = 64, help ="batch size")
+    parser.add_argument('--n_traj', type = int, default = 1, help = "number of latent trajectories")
+    parser.add_argument('--ce_weight', type = int, default = 100, help = "weight multiplied to cross-entropy loss")
+    parser.add_argument('--obsrv_std', type = float, default = 0.01, help = "observation noise std for reconstruction loss")
+    parser.add_argument('--z_last', action = 'store_false', help = "use the latent state of the last time point for prediction (default: True)")
+
     parser.add_argument('--gen-latent-dims', type = int, default = 100, help = "dimensionality of the latent state in the generative ODE")
     parser.add_argument('--rec-latent-dims', type = int, default = 100, help = "dimensionality of the latent state in the recognition ODE")
     parser.add_argument('--gen-layers', type = int, default = 3, help = "number of layers in ODE func in generative ODE")
@@ -383,6 +408,11 @@ if __name__ == '__main__':
     parser.add_argument('--units', type = int, default = 100, help = "number of units per layer in ODE func")
     parser.add_argument('--gru-units', type = int, default = 100, help = "number of units per layer in the GRU update network")
     parser.add_argument('--classif-units', type = int, default = 100, help = "number of units per layer in the classification network")
+
+    parser.add_argument('--weight_decay', type=float, default=0.0, help="Weight decay (L2 penalty)")
+    parser.add_argument('--dropout_rate', type=float, default=0.0, help="Dropout rate")
+    parser.add_argument('--use_traj_attention', action='store_true', help="Use trajectory attention")
+
     parser.add_argument('--classif', action = 'store_false', help = "include binary classification loss")
     parser.add_argument('--classif_w_recon', action = 'store_false', help = "jointly consider classification loss and reconstruction loss")
 
@@ -457,17 +487,23 @@ if __name__ == '__main__':
     # Define Hyperparameter Search Space
     # ============================================================================
     search_space = {
-        "lr": tune.loguniform(1e-3, 1e-2),
+        "sample_tp": tune.choice([0.5]),
         "n_traj": tune.choice([1]), 
-        "ce_weight": tune.choice([100]),
-        "z_last": tune.choice([True, False]), # use last z
-        "gen_latent_dims": tune.choice([100]),
-        "rec_latent_dims": tune.choice([100]),
+        "z_last": tune.choice([True]), # use z(last)
+
+        "lr": tune.loguniform(5e-4, 2e-3),
+        "ce_weight": tune.choice([2, 5, 10, 100]),
+        "gen_latent_dims": tune.choice([64, 100, 128]),
+        "rec_latent_dims": tune.choice([64, 100, 128]),
         "gen_layers": tune.choice([3]),
         "rec_layers": tune.choice([3]),
-        "gru_units": tune.choice([100]),
-        "classif_units": tune.choice([50, 100, 200]),
-        "sample_tp": tune.choice([0.1, 0.3, 0.5, 0.7]),
+        "units": tune.choice([100, 200]),
+        "gru_units": tune.choice([100, 200]),
+        "classif_units": tune.choice([100, 200]),
+
+        "weight_decay": tune.choice([0.0, 1e-4, 5e-4]),
+        "dropout_rate": tune.choice([0.0, 0.2, 0.4]),
+        "use_traj_attention": tune.choice([True, False]),
         
         "args": copy.deepcopy(args),
         "data_obj": data_ref
@@ -478,7 +514,7 @@ if __name__ == '__main__':
     scheduler = ASHAScheduler(
         metric="auc",               # Metric to monitor (must match train.report key)
         mode="max",                 # Objective is to maximize validation AUC
-        grace_period=10,            # Minimum number of epochs a trial runs before being stopped
+        grace_period=20,            # Minimum number of epochs a trial runs before being stopped
         reduction_factor=4,         # 1/4 the number of trials every round
         max_t=args.n_iter           # Maximum number of epochs any trial will run
     )
@@ -561,9 +597,13 @@ if __name__ == '__main__':
             "rec_latent_dims": best_config.get("rec_latent_dims"),
             "gen_layers": best_config.get("gen_layers"),
             "rec_layers": best_config.get("rec_layers"),
+            "units": best_config.get("units"),
             "gru_units": best_config.get("gru_units"),
             "classif_units": best_config.get("classif_units"),
             "sample_tp": best_config.get("sample_tp"),
+            "weight_decay": best_config.get("weight_decay"),
+            "dropout_rate": best_config.get("dropout_rate"),
+            "use_traj_attention": best_config.get("use_traj_attention"),
         }
         logger.info(f"Best hyperparameters found: {best_hyperparams}")
         logger.info(f"Best trial final validation loss: {best_result.metrics['loss']:.4f}")
@@ -583,9 +623,13 @@ if __name__ == '__main__':
                 rldim_str = f"rldim{best_hyperparams['rec_latent_dims']}"
                 glayer_str = f"glayer{best_hyperparams['gen_layers']}"
                 rlayer_str = f"rlayer{best_hyperparams['rec_layers']}"
+                nunits_str = f"nunits{best_hyperparams['units']}"
                 ngru_str = f"ngru{best_hyperparams['gru_units']}"
                 nclassif_str = f"nclassif{best_hyperparams['classif_units']}"
                 sampletp_str = f"sampletp{best_hyperparams['sample_tp']}".replace('.', 'p')
+                weightdecay_str = f"wd{best_hyperparams['weight_decay']}".replace('.', 'p')
+                dropout_str = f"dropout{best_hyperparams['dropout_rate']}".replace('.', 'p')
+                usetrajattn_str = f"usetrajattn{best_hyperparams['use_traj_attention']}"
 
                 best_auc_score = best_result.metrics.get('auc', 0.0)
                 auc_str = f"auc{best_auc_score:.3f}".replace('.', 'p')
@@ -593,8 +637,10 @@ if __name__ == '__main__':
                     f"best_latent_ode_{args.dataset}_{auc_str}_"
                     f"lr{lr_str}_{ntraj_str}_{cew_str}_"
                     f"{gldim_str}_{rldim_str}_{glayer_str}_"
-                    f"{rlayer_str}_{ngru_str}_{nclassif_str}_"
-                    f"{sampletp_str}_{zlast_str}_{timestamp}.pt"
+                    f"{rlayer_str}_{nunits_str}_{ngru_str}_"
+                    f"{nclassif_str}_{sampletp_str}_{zlast_str}_"
+                    f"{weightdecay_str}_{dropout_str}_{usetrajattn_str}_"
+                    f"{timestamp}.pt"
                 )
                 save_path = os.path.join(MODELS_DIR, args.dataset.lower(), filename)
 

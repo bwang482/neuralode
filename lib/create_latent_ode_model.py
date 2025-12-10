@@ -66,10 +66,12 @@ def create_LatentODE_model(args, input_dim, z0_prior, obsrv_std, n_label):
 		z0_dim = gen_latent_dim,
 		z0_prior = z0_prior,
 		obsrv_std = obsrv_std,
+		dropout_rate = args.dropout_rate,
 		n_label = n_label,
 		n_unit = args.classif_units,
 		classif = args.classif,
-		classif_w_recon = args.classif_w_recon)
+		classif_w_recon = args.classif_w_recon,
+		use_traj_attention=args.use_traj_attention)
 
 	return model
 

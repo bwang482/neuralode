@@ -67,8 +67,7 @@ class GRU_unit(nn.Module):
 		new_mean, new_std = utils.split_last_dim(self.new_state_netw(y_concat))
 		# n_traj x n_subj x (latent_dim x 2) --> two n_traj x n_subj x latent_dim
 
-		# new_std = new_std.abs() #Commented by Bo
-		new_std = F.softplus(new_std) + 1e-6 #added by Bo
+		new_std = F.softplus(new_std) + 1e-6 #added by bo
 
 		new_mean = (1-update_gate) * new_mean + update_gate * y_mean
 		new_std = (1-update_gate) * new_std + update_gate * y_std
@@ -84,7 +83,7 @@ class GRU_unit(nn.Module):
 			new_mean = mask * new_mean + (1-mask) * y_mean
 			new_std = mask * new_std + (1-mask) * y_std
 
-		# new_std = new_std.abs() #Commented by Bo
+		new_std = new_std.abs()
 
 		return new_mean, new_std   # shape: n_traj x n_subj x latent_dim
 
@@ -141,8 +140,7 @@ class Encoder_z0_ODE_RNN(nn.Module):
 		mean_z0, std_z0 = utils.split_last_dim(self.transform_z0(torch.cat((mean_z0, std_z0), -1)))
 		# 1 x n_subj x (latent_dim * 2) -> 1 x n_subj x (z0_dim * 2) -> two 1 x n_subj x z0_dim
 
-		# std_z0 = std_z0.abs() #Commented by Bo
-		std_z0 = F.softplus(std_z0) + 1e-6 #Added by Bo: softplus-and-shift to ensure std_z0 values >0
+		std_z0 = std_z0.abs() 
 
 		return mean_z0, std_z0   # shape: 1 x n_subj x z0_dim
 
