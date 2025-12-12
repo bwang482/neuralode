@@ -354,6 +354,9 @@ def variable_time_collate_fn_optimized(batch, args, device, global_max_t):
                 continue
                 
             time_idx = indices[i].item()
+            
+            combined_mask_sparse[b, time_idx, :] = 1.0
+            
             row_start = vals.indptr[i]
             row_end = vals.indptr[i+1]
             
@@ -363,7 +366,7 @@ def variable_time_collate_fn_optimized(batch, args, device, global_max_t):
                     new_feat_idx = feat_mapping[orig_feat_idx]
                     value = vals.data[j]
                     combined_vals_sparse[b, time_idx, new_feat_idx] = value
-                    combined_mask_sparse[b, time_idx, new_feat_idx] = 1.0
+                    # combined_mask_sparse[b, time_idx, new_feat_idx] = 1.0
     
     # Now expand to full feature dimension
     # This is necessary for compatibility with the model
