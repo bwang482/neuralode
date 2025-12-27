@@ -229,8 +229,6 @@ def encode_categorical(
         drop_first: bool = True,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """ Encode categorical variables using one-hot encoding. """
-
-    # all_categories = pd.concat([train_series, test_series]).unique()
     
     lb = LabelBinarizer()
     lb.fit(train_series)

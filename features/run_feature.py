@@ -18,8 +18,6 @@ from features.feature_compute import compute_features
 t0 = time.time()
 parser = argparse.ArgumentParser()
 parser.add_argument('-c', '--cohort', type=str, help='Cohort selection', default='MDD')
-parser.add_argument('-df', '--data_folder', type=str, help='Data folder name', default="random_visit_w_filters_all_matched")
-parser.add_argument('-ff', '--feat_folder', type=str, help='Feature folder name', default="random_visit_w_filters_all_matched")
 parser.add_argument('-lw', '--lookback_window', type=int, help='Lookback window', default=1)
 args = parser.parse_args()
 
@@ -84,8 +82,8 @@ def print_summary(df):
 
 
 def feature_extraction(feat_params):
-    DATA_path = os.path.join(DATA_DIR, args.cohort.upper(), args.data_folder)
-    FEAT_path = os.path.join(FEAT_DIR, args.cohort.upper(), args.feat_folder)
+    DATA_path = os.path.join(DATA_DIR, args.cohort.upper())
+    FEAT_path = os.path.join(FEAT_DIR, args.cohort.upper())
 
     train_data_filename = f"RPDRml__{args.cohort.upper()}_train.{args.lookback_window}y.pk"
     val_data_filename = f"RPDRml__{args.cohort.upper()}_val.{args.lookback_window}y.pk"

@@ -88,3 +88,14 @@ def show_results(test_metrics):
     print(f"Overall AUROC : {roc_auc_score(yte, yte_pred)}")
 
 
+def adjusted_ppv(sensitivity_at_k, k, true_prevalence):
+    """
+    Estimate PPV at top k% under true prevalence,
+    assuming model ranking is preserved.
+    """
+    # This is approximate and assumes ranking stability
+    tp_rate = sensitivity_at_k * true_prevalence
+    fp_rate = (k - sensitivity_at_k * true_prevalence)  # rough approximation
+    return tp_rate / k
+
+

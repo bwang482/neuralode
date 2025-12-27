@@ -140,10 +140,6 @@ def compute_coding_features(df_train,
     """
 
     if feat_lvl == 'patient':
-        # data_train = [" ".join([str(code) for visit in pt for code in visit if str(code)!="nan"]) 
-        #                                 for pt in df_train[feat_type+"_codes"]]
-        # data_test = [" ".join([str(code) for visit in pt for code in visit if str(code)!="nan"]) 
-        #                                 for pt in df_test[feat_type+"_codes"]]
         data_train = [[" ".join(list(set([code for code in visit]))) for visit in pt]
                                         for pt in df_train[feat_type+"_codes"]]
         data_test = [[" ".join(list(set([code for code in visit]))) for visit in pt]
